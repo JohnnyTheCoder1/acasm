@@ -102,3 +102,7 @@ quit
 
 - Script mode to run a file of commands.
 - Unit tests and packaging as an installable tool.
+
+## License
+
+MIT License. See the `LICENSE` file for details.
