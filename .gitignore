@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test/coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors/IDE
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
