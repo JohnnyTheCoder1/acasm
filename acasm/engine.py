@@ -105,6 +105,16 @@ class Engine:
             raise ValueError("Empty input")
         # Replace caret with ** for exponentiation
         text = text.replace("^", "**")
+        # Allow prime notation: f' -> f_d, f'' -> f_d2, etc.
+        # This helps users write f'(x) naturally in the REPL.
+        import re
+        def _prime_sub(m: re.Match) -> str:
+            base = m.group(1)
+            primes = m.group(2)
+            n = len(primes)
+            return f"{base}_d{n if n>1 else ''}"
+        # Replace only standalone identifiers with trailing primes
+        text = re.sub(r"\b([A-Za-z_]\w*)(\'+)(?=[^A-Za-z0-9_]|$)", _prime_sub, text)
         try:
             # Enable implicit multiplication like 2x, (x+1)(x-1), 2 sin(x)
             transformations = standard_transformations + (

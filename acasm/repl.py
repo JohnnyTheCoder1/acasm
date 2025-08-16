@@ -185,7 +185,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print_out(msg)
                 continue
 
-            # Assignment: name = expr
+            # Assignment: name = expr (supports prime notation in name)
             if "=" in line and not any(line.lower().startswith(cmd) for cmd in ["simplify", "expand", "factor", "diff", "integrate", "solve"]):
                 # Function definition form: def f(x, y) = <expr>
                 if line.lower().startswith("def ") and "(" in line and ")" in line:
@@ -208,6 +208,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # Variable assignment
                 name, expr_text = split_once(line, "=")
                 name = name.strip()
+                # Normalize prime notation in variable/function name: f' -> f_d, f'' -> f_d2
+                import re
+                m = re.fullmatch(r"([A-Za-z_]\w*)(\'+)", name)
+                if m:
+                    base = m.group(1)
+                    n = len(m.group(2))
+                    name = f"{base}_d{n if n>1 else ''}"
                 expr_text = expr_text.strip()
                 if not name.isidentifier():
                     print_out("Error: Left side of assignment must be a valid name.")
