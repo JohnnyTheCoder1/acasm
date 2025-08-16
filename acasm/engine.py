@@ -105,16 +105,6 @@ class Engine:
             raise ValueError("Empty input")
         # Replace caret with ** for exponentiation
         text = text.replace("^", "**")
-        # Allow prime notation: f' -> f_d, f'' -> f_d2, etc.
-        # This helps users write f'(x) naturally in the REPL.
-        import re
-        def _prime_sub(m: re.Match) -> str:
-            base = m.group(1)
-            primes = m.group(2)
-            n = len(primes)
-            return f"{base}_d{n if n>1 else ''}"
-        # Replace only standalone identifiers with trailing primes
-        text = re.sub(r"\b([A-Za-z_]\w*)(\'+)(?=[^A-Za-z0-9_]|$)", _prime_sub, text)
         try:
             # Enable implicit multiplication like 2x, (x+1)(x-1), 2 sin(x)
             transformations = standard_transformations + (
@@ -129,6 +119,37 @@ class Engine:
             return expr
         except Exception as e:
             raise ValueError(f"Could not parse expression: {e}")
+
+    # Helper: handle names with trailing prime characters (e.g., f', f'')
+    def _split_prime_suffix(self, name: str) -> tuple[str, int]:
+        count = 0
+        while name.endswith("'") and name:
+            name = name[:-1]
+            count += 1
+        return name, count
+
+    def resolve_function_name(self, name_or_prime: str) -> str:
+        """
+        Given a function name that may include prime suffixes, ensure the
+        corresponding derivative function exists and return the stored name.
+        Examples:
+          - 'f'   -> 'f'
+          - "f'"  -> 'f_d'
+          - "f''" -> 'f_d2'
+        """
+        base, n = self._split_prime_suffix(name_or_prime.strip())
+        if n == 0:
+            # Return as-is (may or may not exist yet)
+            return base
+        # Ensure base exists
+        if base not in self.session.functions:
+            raise ValueError(f"No function named {base}")
+        # Target derived name
+        target = f"{base}_d{n if n > 1 else ''}"
+        if target not in self.session.functions:
+            # Create derivative function of order n
+            self.derivative_func(base, None, n)
+        return target
 
     def assign(self, name: str, expr_text: str) -> Tuple[str, sp.Expr]:
         expr = self.parse(expr_text)

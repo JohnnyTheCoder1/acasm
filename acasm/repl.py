@@ -116,9 +116,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print_out("No functions defined.")
                 else:
                     for name, lam in funcs.items():
+                        # Show a prime alias for derivative names
+                        prime_alias = None
+                        if name.endswith("_d"):
+                            base = name[:-2]
+                            prime_alias = f"{base}'"
+                        elif "_d" in name:
+                            base, _, order = name.partition("_d")
+                            if order.isdigit():
+                                prime_alias = base + ("'" * int(order))
+                        disp_name = f"{name} ({prime_alias})" if prime_alias else name
                         args = lam.variables if isinstance(lam.variables, tuple) else (lam.variables,)
                         arglist = ", ".join(str(a) for a in args)
-                        print_out(f"{name}({arglist}) = {eng.format(lam.expr)}")
+                        print_out(f"{disp_name}({arglist}) = {eng.format(lam.expr)}")
                 continue
 
             # Utilities that don't require evaluation
@@ -185,7 +195,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print_out(msg)
                 continue
 
-            # Assignment: name = expr (supports prime notation in name)
+            # Assignment: name = expr
             if "=" in line and not any(line.lower().startswith(cmd) for cmd in ["simplify", "expand", "factor", "diff", "integrate", "solve"]):
                 # Function definition form: def f(x, y) = <expr>
                 if line.lower().startswith("def ") and "(" in line and ")" in line:
@@ -208,13 +218,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # Variable assignment
                 name, expr_text = split_once(line, "=")
                 name = name.strip()
-                # Normalize prime notation in variable/function name: f' -> f_d, f'' -> f_d2
-                import re
-                m = re.fullmatch(r"([A-Za-z_]\w*)(\'+)", name)
-                if m:
-                    base = m.group(1)
-                    n = len(m.group(2))
-                    name = f"{base}_d{n if n>1 else ''}"
+                # Normalize prime notation in the name (e.g., f' -> f_d, f'' -> f_d2)
+                try:
+                    name = eng.resolve_function_name(name)
+                except Exception:
+                    # If it's not a function name with primes, leave as is for variable assignment
+                    pass
                 expr_text = expr_text.strip()
                 if not name.isidentifier():
                     print_out("Error: Left side of assignment must be a valid name.")
@@ -294,7 +303,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("dfunc "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname_in = parts[0]
+                    fname = eng.resolve_function_name(fname_in) if fname_in else fname_in
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     n = int(parts[2]) if len(parts) >= 3 and parts[2] else 1
                     gname, _ = eng.derivative_func(fname, var, n)
@@ -309,7 +319,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("critical "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname = eng.resolve_function_name(parts[0])
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     pts = eng.critical(fname, var)
                     if not pts:
@@ -326,13 +336,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("extrema "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname = eng.resolve_function_name(parts[0])
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     data = eng.extrema(fname, var)
                     if not data:
                         res = "No extrema"
                     else:
-                        # Also report y values
                         lam = eng.session.functions.get(fname)
                         args = lam.variables if isinstance(lam.variables, tuple) else (lam.variables,)
                         xvar = eng.session.get_symbol(args[0].name)
@@ -351,7 +360,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("inflection "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname = eng.resolve_function_name(parts[0])
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     pts = eng.inflection(fname, var)
                     if not pts:
@@ -375,10 +384,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("domain "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname = eng.resolve_function_name(parts[0])
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     dom = eng.domain(fname, var)
-                    # For Reals, show as (-oo, oo) for clarity
                     res = str(sp.Interval(-sp.oo, sp.oo)) if dom == sp.S.Reals else str(dom)
                     print_out(res)
                     last_input = line
@@ -390,7 +398,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("range "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname = eng.resolve_function_name(parts[0])
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     ran = eng.range(fname, var)
                     res = str(ran)
@@ -404,7 +412,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("solvef "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = parts[0]
+                    fname = eng.resolve_function_name(parts[0])
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     value = parts[2] if len(parts) >= 3 and parts[2] else None
                     sols = eng.solve_function(fname, var, value)
