@@ -1,4 +1,4 @@
-from acasm.repl import main
+from Acasm.repl import main
 
 if __name__ == "__main__":
     raise SystemExit(main())
