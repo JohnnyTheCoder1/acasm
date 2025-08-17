@@ -5,7 +5,7 @@ Note: Clipboard features (`cpresult`, `cpopresult`) use `pyperclip`. If not inst
 ```
 pip install pyperclip
 ```
-# Accessible CAS (acasm)
+# Accessible CAS (Acasm)
 
 A simple, screen-reader-friendly computer algebra system (CAS) for Windows terminals. It uses SymPy under the hood and focuses on clear, unambiguous text output suitable for JAWS and other screen readers.
 
@@ -102,6 +102,7 @@ quit
 
 - Script mode to run a file of commands.
 - Unit tests and packaging as an installable tool.
+- Support for doing regression on a dataset e.g linear regression, exponential regression and more.
 
 ## License
 
