@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, Any, Tuple, List, Sequence
+import ast
 
 import sympy as sp
 from sympy.parsing.sympy_parser import (
@@ -76,7 +77,8 @@ SAFE_FUNCTIONS = {
 @dataclass
 class Session:
     symbols: Dict[str, sp.Symbol] = field(default_factory=dict)
-    values: Dict[str, sp.Expr] = field(default_factory=dict)
+    # Allow values to be SymPy expressions or Python lists for data sequences
+    values: Dict[str, Any] = field(default_factory=dict)
     functions: Dict[str, sp.Lambda] = field(default_factory=dict)
     options: Options = field(default_factory=lambda: Options(**DEFAULT_OPTIONS.__dict__))
 
@@ -152,7 +154,37 @@ class Engine:
         return target
 
     def assign(self, name: str, expr_text: str) -> Tuple[str, sp.Expr]:
-        expr = self.parse(expr_text)
+        text = expr_text.strip()
+        # Treat [ ... ] on the right-hand side as a Python list literal for data
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                data = ast.literal_eval(text)
+            except Exception as e:
+                raise ValueError(f"Invalid list literal: {e}")
+            if not isinstance(data, list):
+                raise ValueError("Only flat lists are supported for sequence assignment")
+            # Validate contents and convert to SymPy numbers where possible
+            seq: List[sp.Expr] = []
+            for i, v in enumerate(data):
+                if isinstance(v, (int, float)):
+                    seq.append(sp.nsimplify(v))
+                elif isinstance(v, (str,)):
+                    # Try to parse numeric strings like "1/2" or "3.14"
+                    try:
+                        seq.append(sp.nsimplify(v))
+                    except Exception:
+                        raise ValueError(f"List element {i+1} is not numeric: {v}")
+                elif isinstance(v, sp.Basic):
+                    seq.append(v)
+                else:
+                    raise ValueError(f"List element {i+1} must be a number, got {type(v).__name__}")
+            self.session.values[name] = seq
+            # Provide a symbol as well so name can still be used as a symbol if needed
+            self.session.get_symbol(name)
+            # Return a SymPy Tuple for formatting purposes
+            return name, sp.Tuple(*seq)
+        # Otherwise, parse as an expression
+        expr = self.parse(text)
         self.session.values[name] = expr
         # Also ensure a symbol exists for that name
         self.session.get_symbol(name)
@@ -319,6 +351,159 @@ class Engine:
             repls.append((self.session.get_symbol(name), val_expr))
         return expr.subs(repls)
 
+    # --- Data helpers and regressions ---
+    def _get_sequence(self, text: str) -> List[sp.Expr]:
+        """Resolve a sequence argument which can be a variable name or a list literal."""
+        t = text.strip()
+        if not t:
+            raise ValueError("Missing sequence argument")
+        # Inline list literal
+        if t.startswith("[") and t.endswith("]"):
+            try:
+                data = ast.literal_eval(t)
+            except Exception as e:
+                raise ValueError(f"Invalid list literal: {e}")
+            if not isinstance(data, list):
+                raise ValueError("Sequence must be a list")
+            seq: List[sp.Expr] = []
+            for i, v in enumerate(data):
+                try:
+                    seq.append(sp.nsimplify(v))
+                except Exception:
+                    raise ValueError(f"List element {i+1} is not numeric: {v}")
+            return seq
+        # Variable reference
+        if t not in self.session.values:
+            raise ValueError(f"Unknown variable: {t}")
+        val = self.session.values[t]
+        if isinstance(val, list):
+            return [sp.nsimplify(v) if not isinstance(v, sp.Basic) else v for v in val]
+        raise ValueError(f"{t} is not a list; assign with: {t} = [1, 2, ...]")
+
+    def _validate_xy(self, x: List[sp.Expr], y: List[sp.Expr]) -> None:
+        if not isinstance(x, list) or not isinstance(y, list):
+            raise ValueError("x and y must be lists")
+        if len(x) != len(y):
+            raise ValueError("x and y must have the same length")
+        if len(x) < 2:
+            raise ValueError("Need at least 2 points for regression")
+
+    def _linfit(self, x: List[sp.Expr], y: List[sp.Expr]) -> Tuple[sp.Expr, sp.Expr]:
+        n = sp.Integer(len(x))
+        sx = sum(x)
+        sy = sum(y)
+        sxx = sum([xi * xi for xi in x])
+        sxy = sum([xi * yi for xi, yi in zip(x, y)])
+        denom = n * sxx - sx * sx
+        if denom == 0:
+            raise ValueError("Regression undefined: all x values are identical")
+        m = (n * sxy - sx * sy) / denom
+        b = (sy - m * sx) / n
+        return m, b
+
+    def _r2(self, y: List[sp.Expr], yhat: List[sp.Expr]) -> sp.Expr:
+        n = len(y)
+        if n == 0:
+            return sp.Integer(0)
+        ybar = sum(y) / sp.Integer(n)
+        ss_res = sum([(yi - hi) ** 2 for yi, hi in zip(y, yhat)])
+        ss_tot = sum([(yi - ybar) ** 2 for yi in y])
+        if ss_tot == 0:
+            # All y equal; perfect fit if residuals are zero
+            return sp.Integer(1) if ss_res == 0 else sp.Integer(0)
+        return sp.simplify(1 - ss_res / ss_tot)
+
+    def _register_fit_function(self, expr: sp.Expr, var_name: str = "x", base: str = "f") -> Tuple[str, sp.Lambda]:
+        x = self.session.get_symbol(var_name)
+        lam = sp.Lambda(x, expr)
+        # Find an available name: f, f2, f3, ...
+        name = base
+        if name in self.session.functions:
+            i = 2
+            while f"{base}{i}" in self.session.functions:
+                i += 1
+            name = f"{base}{i}"
+        self.session.functions[name] = lam
+        return name, lam
+
+    def linreg(self, args_text: str) -> Tuple[str, sp.Expr, Tuple[sp.Expr, sp.Expr], sp.Expr]:
+        # Usage: linreg <x>, <y>
+        parts = [p.strip() for p in args_text.split(",")]
+        if len(parts) != 2:
+            raise ValueError("Usage: linreg <x>, <y>")
+        x = self._get_sequence(parts[0])
+        y = self._get_sequence(parts[1])
+        self._validate_xy(x, y)
+        # Slope (a) and intercept (b) for y = a*x + b
+        a, b = self._linfit(x, y)
+        xsym = self.session.get_symbol("x")
+        expr = sp.simplify(a * xsym + b)
+        name, _ = self._register_fit_function(expr, var_name="x", base="f")
+        yhat = [expr.subs(xsym, xi) for xi in x]
+        r2 = self._r2(y, yhat)
+        return name, expr, (a, b), r2
+
+    def expreg(self, args_text: str) -> Tuple[str, sp.Expr, Tuple[sp.Expr, sp.Expr], sp.Expr]:
+        # Model: y = b * a^x  (equivalently ln(y) = ln(b) + x*ln(a))
+        parts = [p.strip() for p in args_text.split(",")]
+        if len(parts) != 2:
+            raise ValueError("Usage: expreg <x>, <y>")
+        x = self._get_sequence(parts[0])
+        y = self._get_sequence(parts[1])
+        self._validate_xy(x, y)
+        ly: List[sp.Expr] = []
+        for i, yi in enumerate(y):
+            if yi.is_real is False:
+                raise ValueError("y values must be positive real for expreg")
+            try:
+                # Ensure positivity
+                if yi <= 0:
+                    raise ValueError
+            except Exception:
+                # Fall back to numerical check
+                if sp.N(yi) <= 0:
+                    raise ValueError("y values must be positive for expreg")
+            ly.append(sp.log(yi))
+        # ln y = ln b + (ln a)*x -> slope = ln a, intercept = ln b
+        slope, intercept = self._linfit(x, ly)
+        a = sp.exp(slope)
+        b = sp.exp(intercept)
+        xsym = self.session.get_symbol("x")
+        expr = sp.simplify(b * (a ** xsym))
+        name, _ = self._register_fit_function(expr, var_name="x", base="f")
+        yhat = [expr.subs(xsym, xi) for xi in x]
+        r2 = self._r2(y, yhat)
+        return name, expr, (a, b), r2
+
+    def powreg(self, args_text: str) -> Tuple[str, sp.Expr, Tuple[sp.Expr, sp.Expr], sp.Expr]:
+        # Model: y = b * x^a  (equivalently ln y = ln b + a*ln x)
+        parts = [p.strip() for p in args_text.split(",")]
+        if len(parts) != 2:
+            raise ValueError("Usage: powreg <x>, <y>")
+        x = self._get_sequence(parts[0])
+        y = self._get_sequence(parts[1])
+        self._validate_xy(x, y)
+        lx: List[sp.Expr] = []
+        ly: List[sp.Expr] = []
+        for i, (xi, yi) in enumerate(zip(x, y)):
+            try:
+                if xi <= 0 or yi <= 0:
+                    raise ValueError
+            except Exception:
+                if sp.N(xi) <= 0 or sp.N(yi) <= 0:
+                    raise ValueError("x and y must be positive for powreg")
+            lx.append(sp.log(xi))
+            ly.append(sp.log(yi))
+        # ln y = ln b + a*ln x -> slope = a, intercept = ln b
+        a, ln_b = self._linfit(lx, ly)
+        b = sp.exp(ln_b)
+        xsym = self.session.get_symbol("x")
+        expr = sp.simplify(b * (xsym ** a))
+        name, _ = self._register_fit_function(expr, var_name="x", base="f")
+        yhat = [expr.subs(xsym, xi) for xi in x]
+        r2 = self._r2(y, yhat)
+        return name, expr, (a, b), r2
+
     # Linear algebra helpers
     def matrix(self, text: str) -> sp.Matrix:
         # Accept Python-like list input: [[1,2],[3,4]]
@@ -370,8 +555,16 @@ class Engine:
     # Session save/load (variables and options)
     def save(self, path: str) -> str:
         import json
+        # Values: support lists explicitly for robust reloads
+        values_out: Dict[str, Any] = {}
+        for k, v in self.session.values.items():
+            if isinstance(v, list):
+                # Store as plain JSON list of strings for readability
+                values_out[k] = [str(sp.nsimplify(e)) if not isinstance(e, sp.Basic) else str(e) for e in v]
+            else:
+                values_out[k] = str(v)
         data = {
-            "values": {k: str(v) for k, v in self.session.values.items()},
+            "values": values_out,
             "functions": {
                 k: {
                     "args": [str(a) for a in (v.variables if isinstance(v.variables, tuple) else (v.variables,))],
@@ -396,8 +589,33 @@ class Engine:
         self.session.functions.clear()
         for k, v in data.get("values", {}).items():
             try:
-                self.session.values[k] = self.parse(v)
-                self.session.get_symbol(k)
+                if isinstance(v, list):
+                    # Rehydrate list of values
+                    seq: List[sp.Expr] = []
+                    for e in v:
+                        try:
+                            seq.append(sp.nsimplify(e))
+                        except Exception:
+                            seq.append(self.parse(str(e)))
+                    self.session.values[k] = seq
+                    self.session.get_symbol(k)
+                elif isinstance(v, str) and v.strip().startswith("[") and v.strip().endswith("]"):
+                    # Old format serialized as string list; try literal_eval
+                    try:
+                        data_list = ast.literal_eval(v)
+                        if isinstance(data_list, list):
+                            seq = [sp.nsimplify(e) for e in data_list]
+                            self.session.values[k] = seq
+                            self.session.get_symbol(k)
+                            continue
+                    except Exception:
+                        pass
+                    # Fallback: try parse as expression
+                    self.session.values[k] = self.parse(v)
+                    self.session.get_symbol(k)
+                else:
+                    self.session.values[k] = self.parse(str(v))
+                    self.session.get_symbol(k)
             except Exception:
                 pass
         for k, fv in data.get("functions", {}).items():
@@ -487,13 +705,45 @@ class Engine:
         fprime = sp.diff(lam.expr, var)
         fsecond = sp.diff(lam.expr, var, 2)
         sols = sp.solve(sp.Eq(fprime, 0), var)
+        # Attempt to determine global vs local by using function range
+        ran = None
+        try:
+            ran = self.range(name, var_name)
+        except Exception:
+            ran = None
         out: List[Tuple[sp.Expr, str]] = []
         for s in sols:
+            # Local classification via second derivative
+            nature = "unknown"
             try:
-                val = fsecond.subs(var, s)
-                nature = "min" if val.is_positive else ("max" if val.is_negative else "flat")
+                val2 = fsecond.subs(var, s)
+                if val2.is_positive:
+                    nature = "local min"
+                elif val2.is_negative:
+                    nature = "local max"
+                elif val2.is_zero:
+                    nature = "flat"
+                else:
+                    nature = "unknown"
             except Exception:
                 nature = "unknown"
+            # Check potential global by comparing to range endpoints
+            try:
+                yval = sp.simplify(lam.expr.subs(var, s))
+                def eq0(a, b):
+                    try:
+                        return sp.simplify(a - b) == 0 or sp.Eq(a, b) is True
+                    except Exception:
+                        return False
+                if isinstance(ran, sp.Interval):
+                    # Global min if closed lower bound equals yval
+                    if not ran.left_open and (eq0(yval, ran.inf)):
+                        nature = "global min"
+                    # Global max if closed upper bound equals yval
+                    if not ran.right_open and (eq0(yval, ran.sup)):
+                        nature = "global max"
+            except Exception:
+                pass
             out.append((s, nature))
         return out
 

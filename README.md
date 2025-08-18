@@ -24,6 +24,7 @@ A simple, screen-reader-friendly computer algebra system (CAS) for Windows termi
 - Solve equations: `solve x^2 - 4 = 0`, `solve x^2 = 4, x`.
 - Numeric evaluation: `evalf` with adjustable precision (`set digits n`).
 - Linear algebra: `det`, `inv`, `rref` with matrix literals like `[[1,2],[3,4]]`.
+- Data and regression: assign lists with `x = [1,2,3]`, then `linreg x, y`, `expreg x, y`, `powreg x, y`.
 - Assumptions: `assume x real|integer|positive|negative|nonzero`, `forget x`.
 - Session save/load: `save mysession.json`, `load mysession.json`.
 - Options: ASCII output by default (better for screen readers), toggle Unicode if preferred, set digits.
@@ -67,6 +68,11 @@ python main.py
 ```
 help
 x = 3
+sense = [1, 2, 3, 4]
+meas  = [2.1, 4.0, 5.9, 8.2]
+linreg sense, meas      # -> (m, b) for y = m*x + b
+expreg sense, meas      # -> (a, b) for y = a*exp(b*x)
+powreg sense, meas      # -> (a, b) for y = a*x^b
 simplify (x^2 - 1)/(x - 1)
 diff sin(x)^2, x
 integrate exp(-x^2), x
@@ -97,6 +103,7 @@ quit
 - Output avoids heavy box-drawing. Fractions are shown inline like (a)/(b).
 - Powers use `^`. Multiplication often omits `*` in math; we keep `*` visible (e.g., `2*x`).
 - You can switch to Unicode pretty output: `set unicode on`. Switch back: `set unicode off`.
+- For lists: assign as Python-like literal `x = [1,2,3]`. Elements must be numeric. Use these with `linreg`, `expreg`, or `powreg`.
 
 ## Roadmap
 

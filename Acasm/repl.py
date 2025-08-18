@@ -35,6 +35,9 @@ HELP_TEXT = (
     "  det <[[..],[..]]>             Determinant of matrix.\n"
     "  inv <[[..],[..]]>             Inverse of matrix.\n"
     "  rref <[[..],[..]]>            Row-reduced echelon form.\n"
+    "  linreg <x>, <y>               Linear regression: returns (a, b) for y = a*x + b.\n"
+    "  expreg <x>, <y>               Exponential regression: returns (a, b) for y = b*a^x.\n"
+    "  powreg <x>, <y>               Power regression: returns (a, b) for y = b*x^a.\n"
     "  assume <sym> <prop>           Assume property (real, integer, positive, negative, nonzero).\n"
     "  forget <sym>                  Clear assumptions for symbol.\n"
     "  save <path>                   Save session to JSON file.\n"
@@ -108,7 +111,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print_out("No variables assigned.")
                 else:
                     for k, v in session.values.items():
-                        print_out(f"{k} = {eng.format(v)}")
+                        if isinstance(v, list):
+                            # Show lists in a compact Python-like form
+                            try:
+                                disp = "[" + ", ".join(str(eng.format(vi)) for vi in v) + "]"
+                            except Exception:
+                                disp = str(v)
+                            print_out(f"{k} = {disp}")
+                        else:
+                            print_out(f"{k} = {eng.format(v)}")
                 continue
             if line.lower() == "funcs":
                 funcs = eng.list_functions()
@@ -307,8 +318,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     fname = eng.resolve_function_name(fname_in) if fname_in else fname_in
                     var = parts[1] if len(parts) >= 2 and parts[1] else None
                     n = int(parts[2]) if len(parts) >= 3 and parts[2] else 1
-                    gname, _ = eng.derivative_func(fname, var, n)
-                    res = f"{gname} defined"
+                    gname, glam = eng.derivative_func(fname, var, n)
+                    args = glam.variables if isinstance(glam.variables, tuple) else (glam.variables,)
+                    arglist = ", ".join(str(a) for a in args)
+                    res = f"{gname} defined: {gname}({arglist}) = {eng.format(glam.expr)}"
                     print_out(res)
                     last_input = line
                     last_result = res
@@ -346,10 +359,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                         args = lam.variables if isinstance(lam.variables, tuple) else (lam.variables,)
                         xvar = eng.session.get_symbol(args[0].name)
                         items = []
+                        counts = {"local min":0, "local max":0, "global min":0, "global max":0, "flat":0, "unknown":0}
                         for p, kind in data:
                             y = lam.expr.subs(xvar, p)
                             items.append(f"x={eng.format(p)}, y={eng.format(y)} -> {kind}")
+                            counts[kind] = counts.get(kind, 0) + 1
                         res = "; ".join(items)
+                        summary = ", ".join(f"{k}:{v}" for k, v in counts.items() if v)
+                        if summary:
+                            res = res + f"\ncounts: {summary}"
                     print_out(res)
                     last_input = line
                     last_result = res
@@ -412,9 +430,23 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("solvef "):]
                 parts = [p.strip() for p in arg.split(",")]
                 try:
-                    fname = eng.resolve_function_name(parts[0])
-                    var = parts[1] if len(parts) >= 2 and parts[1] else None
-                    value = parts[2] if len(parts) >= 3 and parts[2] else None
+                    # Accept forms: "f, x, 0" or equation-like "f'(x) = 0" / "f_d(x) = 0"
+                    if "=" in arg:
+                        left, right = arg.split("=", 1)
+                        left = left.strip()
+                        right = right.strip()
+                        name_part = left.split("(", 1)[0].strip()
+                        fname = eng.resolve_function_name(name_part)
+                        var = None
+                        if "(" in left and ")" in left:
+                            inside = left[left.find("(") + 1:left.rfind(")")].strip()
+                            if inside:
+                                var = inside
+                        value = right
+                    else:
+                        fname = eng.resolve_function_name(parts[0])
+                        var = parts[1] if len(parts) >= 2 and parts[1] else None
+                        value = parts[2] if len(parts) >= 3 and parts[2] else None
                     sols = eng.solve_function(fname, var, value)
                     res = eng.format(sp.FiniteSet(*sols)) if sols else "{}"
                     print_out(res)
@@ -477,6 +509,54 @@ def main(argv: Optional[list[str]] = None) -> int:
                 arg = line[len("det "):]
                 try:
                     res = eng.format(eng.det(arg))
+                    print_out(res)
+                    last_input = line
+                    last_result = res
+                except Exception as e:
+                    print_out(f"Error: {e}")
+                continue
+            if line.lower().startswith("linreg "):
+                arg = line[len("linreg "):]
+                try:
+                    fname, fexpr, (a,b), r2 = eng.linreg(arg)
+                    res = (
+                        f"y = {eng.format(fexpr)}\n"
+                        f"fitted as {fname}(x)\n"
+                        f"a = {eng.format(a)}, b = {eng.format(b)}\n"
+                        f"R^2 = {eng.format(r2)}"
+                    )
+                    print_out(res)
+                    last_input = line
+                    last_result = res
+                except Exception as e:
+                    print_out(f"Error: {e}")
+                continue
+            if line.lower().startswith("expreg "):
+                arg = line[len("expreg "):]
+                try:
+                    fname, fexpr, (a,b), r2 = eng.expreg(arg)
+                    res = (
+                        f"y = {eng.format(fexpr)}\n"
+                        f"fitted as {fname}(x)\n"
+                        f"a = {eng.format(a)}, b = {eng.format(b)}\n"
+                        f"R^2 = {eng.format(r2)}"
+                    )
+                    print_out(res)
+                    last_input = line
+                    last_result = res
+                except Exception as e:
+                    print_out(f"Error: {e}")
+                continue
+            if line.lower().startswith("powreg "):
+                arg = line[len("powreg "):]
+                try:
+                    fname, fexpr, (a,b), r2 = eng.powreg(arg)
+                    res = (
+                        f"y = {eng.format(fexpr)}\n"
+                        f"fitted as {fname}(x)\n"
+                        f"a = {eng.format(a)}, b = {eng.format(b)}\n"
+                        f"R^2 = {eng.format(r2)}"
+                    )
                     print_out(res)
                     last_input = line
                     last_result = res
@@ -553,7 +633,21 @@ def main(argv: Optional[list[str]] = None) -> int:
                 last_input = line
                 last_result = formatted
             except Exception as e:
-                print_out(f"Error: {e}")
+                # Unknown command or parse error. Offer a hint if it looks like a command.
+                low = line.lower()
+                known = [
+                    "help","quit","exit","set ","vars","funcs","cls","history","last","del ",
+                    "clearvars","restart","delfunc ","clearfuncs","cpresult","cpopresult",
+                    "simplify ","expand ","factor ","diff ","integrate ","solve ","dfunc ",
+                    "critical ","extrema ","inflection ","domain ","range ","solvef ","evalf ",
+                    "ratsimp ","limit ","series ","subs ","det ","inv ","rref ","assume ","forget ",
+                    "save ","load ","linreg ","expreg ","powreg "
+                ]
+                msg = str(e)
+                if any(low.startswith(pfx) for pfx in known):
+                    print_out(f"Error: {msg}")
+                else:
+                    print_out("Unknown command. Type 'help' for a list of commands.")
 
         except KeyboardInterrupt:
             print_out("\nInterrupted. Type 'quit' to exit.")
