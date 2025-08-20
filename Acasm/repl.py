@@ -55,6 +55,10 @@ HELP_TEXT = (
     "  funcs                         List defined functions.\n"
     "  delfunc <f>                   Delete a function.\n"
     "  clearfuncs                    Delete all functions.\n"
+    "\nPlotting:\n"
+    "  plot <f> [, <var>] [, <xmin>] [, <xmax>] [, <width>] [, <height>]   ASCII plot of function.\n"
+    "  plot <expr>, <var> [, <xmin>] [, <xmax>] [, <width>] [, <height>]    ASCII plot of expression.\n"
+    "  asciplot <...>                Alias for plot command.\n"
     "\nUtilities:\n"
     "  cpresult                      Copy last result to clipboard.\n"
     "  cpopresult                    Copy last input and result to clipboard.\n"
@@ -623,6 +627,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                 except Exception as e:
                     print_out(f"Error: {e}")
                 continue
+            if line.lower().startswith("plot ") or line.lower().startswith("asciplot "):
+                if line.lower().startswith("plot "):
+                    arg = line[len("plot "):]
+                else:
+                    arg = line[len("asciplot "):]
+                try:
+                    res = eng.plot(arg)
+                    print_out(res)
+                    last_input = line
+                    last_result = res
+                except Exception as e:
+                    print_out(f"Error: {e}")
+                continue
 
             # Otherwise, evaluate expression
             try:
@@ -641,7 +658,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "simplify ","expand ","factor ","diff ","integrate ","solve ","dfunc ",
                     "critical ","extrema ","inflection ","domain ","range ","solvef ","evalf ",
                     "ratsimp ","limit ","series ","subs ","det ","inv ","rref ","assume ","forget ",
-                    "save ","load ","linreg ","expreg ","powreg "
+                    "save ","load ","linreg ","expreg ","powreg ","plot ","asciplot "
                 ]
                 msg = str(e)
                 if any(low.startswith(pfx) for pfx in known):
