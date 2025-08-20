@@ -815,3 +815,126 @@ class Engine:
         except Exception:
             return function_range(lam.expr, var, sp.S.Reals)
 
+    def plot(self, args_text: str) -> str:
+        """
+        ASCII plot of a function or expression.
+        Usage: plot <function_name> [, <var>] [, <xmin>] [, <xmax>] [, <width>] [, <height>]
+        Or: plot <expr>, <var> [, <xmin>] [, <xmax>] [, <width>] [, <height>]
+        """
+        import math
+        
+        parts = [p.strip() for p in args_text.split(",")]
+        if not parts or not parts[0]:
+            raise ValueError("Usage: plot <function_name>|<expr> [, <var>] [, <xmin>] [, <xmax>] [, <width>] [, <height>]")
+        
+        # Default parameters
+        x_min, x_max = -10, 10
+        width, height = 60, 20
+        expr = None
+        var = None
+        
+        # Try to parse first argument as function name
+        func_name = parts[0]
+        if func_name in self.session.functions:
+            # Plotting a defined function
+            lam = self.session.functions[func_name]
+            expr = lam.expr
+            if isinstance(lam.variables, tuple):
+                if len(lam.variables) != 1:
+                    raise ValueError("Can only plot single-variable functions")
+                var = lam.variables[0]
+            else:
+                var = lam.variables
+                
+            # Parse additional parameters for function plot: var, xmin, xmax, width, height
+            if len(parts) >= 2 and parts[1]:
+                var = self.session.get_symbol(parts[1])
+            if len(parts) >= 3 and parts[2]:
+                x_min = float(self.parse(parts[2]).evalf(6))
+            if len(parts) >= 4 and parts[3]:
+                x_max = float(self.parse(parts[3]).evalf(6))
+            if len(parts) >= 5 and parts[4]:
+                width = int(parts[4])
+            if len(parts) >= 6 and parts[5]:
+                height = int(parts[5])
+        else:
+            # Plotting an expression
+            if len(parts) < 2:
+                raise ValueError("For expressions, specify variable: plot <expr>, <var> [, <xmin>] [, <xmax>] [, <width>] [, <height>]")
+            
+            expr = self.parse(parts[0])
+            var = self.session.get_symbol(parts[1])
+            
+            if len(parts) >= 3 and parts[2]:
+                x_min = float(self.parse(parts[2]).evalf(6))
+            if len(parts) >= 4 and parts[3]:
+                x_max = float(self.parse(parts[3]).evalf(6))
+            if len(parts) >= 5 and parts[4]:
+                width = int(parts[4])
+            if len(parts) >= 6 and parts[5]:
+                height = int(parts[5])
+        
+        # Validate parameters
+        if width < 10 or width > 200:
+            width = 60
+        if height < 5 or height > 50:
+            height = 20
+        if x_min >= x_max:
+            x_min, x_max = -10, 10
+            
+        # Convert sympy expression to evaluable function
+        try:
+            func = sp.lambdify(var, expr, 'math')
+        except Exception:
+            # Fallback for expressions that don't work with math module
+            func = sp.lambdify(var, expr)
+        
+        # Generate x values
+        x_vals = [x_min + (x_max - x_min) * i / (width - 1) for i in range(width)]
+        
+        # Evaluate function
+        y_vals = []
+        for x_val in x_vals:
+            try:
+                y = func(x_val)
+                if isinstance(y, complex):
+                    y = y.real
+                if hasattr(math, 'isinf') and math.isinf(y):
+                    y = 1e6 if y > 0 else -1e6
+                elif hasattr(math, 'isnan') and math.isnan(y):
+                    y = 0.0
+                y_vals.append(float(y))
+            except Exception:
+                y_vals.append(0.0)
+        
+        # Scale to fit height  
+        y_min, y_max = min(y_vals), max(y_vals)
+        if abs(y_max - y_min) < 1e-10:  # Nearly constant function
+            y_center = y_min
+            y_min = y_center - 0.5
+            y_max = y_center + 0.5
+            
+        # Create plot
+        lines = []
+        for row in range(height):
+            line = []
+            y_threshold = y_min + (y_max - y_min) * (height - 1 - row) / (height - 1)
+            
+            for col in range(width):
+                if abs(y_vals[col] - y_threshold) < (y_max - y_min) / height * 1.2:
+                    line.append('*')
+                else:
+                    line.append(' ')
+            lines.append(''.join(line))
+        
+        # Add axis labels and info
+        plot_text = []
+        if func_name in self.session.functions:
+            plot_text.append(f"Plot of function {func_name}({var}):")
+        else:
+            plot_text.append(f"Plot of {expr}:")
+        plot_text.extend(lines)
+        plot_text.append(f"X: {x_min:.2g} to {x_max:.2g}, Y: {y_min:.2g} to {y_max:.2g}")
+        
+        return "\n".join(plot_text)
+
